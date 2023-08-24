@@ -1925,7 +1925,8 @@ To run the application simply run using `flutter run` and make sure if you use M
 
 If all goes well you should see the following:
 
-![[flutter-ssr-counter.png]]
+![](screenshots/flutter-ssr-counter.png)
+
 ## Conclusion
 
 There is a lot more we can do with this example but after doing a deep dive on the format I thought it would be useful for others to understand and see some examples.
