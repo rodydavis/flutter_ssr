@@ -1927,8 +1927,243 @@ If all goes well you should see the following:
 
 ![](screenshots/flutter-ssr-counter.png)
 
+## What about the logic?
+
+We can also choose to ship the logic from the server along with the UI. The [rfw example](https://github.com/flutter/packages/tree/main/packages/rfw/example/wasm) uses [wasm](https://pub.dev/packages/wasm_run_flutter) but in this example we will use JS which will use [JavaScriptCore](https://developer.apple.com/documentation/javascriptcore) on iOS/MacOS and [QuickJS](https://bellard.org/quickjs/) on all other platforms.
+
+We can start by updating the server with 2 routes that will return the UI and logic.
+
+Create and update the following file located at `server/routes/counter.rfw.dart`:
+
+```dart
+import 'package:dart_frog/dart_frog.dart';
+import 'package:rfw/formats.dart';
+
+Response onRequest(RequestContext context) {
+  return Response.bytes(
+    body: encodeLibraryBlob(parseLibraryFile(template)),
+    headers: {'Content-Type': 'text/rfw'},
+  );
+}
+
+const template = '''
+import widgets;
+import material;
+
+widget root = Scaffold(
+  appBar: AppBar(
+    title: Text(text: ['Counter Example']),
+    centerTitle: true,
+    backgroundColor: data.colorScheme.inversePrimary,
+  ),
+  body: Center(
+    child: Column(
+      mainAxisAlignment: "center",
+      children: [
+        Text(text: ["You have pushed the button this many times:"]),
+        Text(
+          text: [data.state.value],
+          style: {
+            fontSize: 20.0,
+          },
+        ),
+      ],
+    ),
+  ),
+  floatingActionButton: Row(
+    mainAxisSize: "min",
+    children: [
+      IconButton(
+        onPressed: event "decrement" {},
+        tooltip: ["Decrement"],
+        icon: Icon(
+            icon: 0xe516,
+            fontFamily: 'MaterialIcons',
+        ),
+      ),
+      IconButton(
+        onPressed: event "increment" {},
+        tooltip: ["Increment"],
+        icon: Icon(
+            icon: 0xe047,
+            fontFamily: 'MaterialIcons',
+        ),
+      ),
+    ],
+  ),
+);
+''';
+```
+
+This should look almost the same as before. Now create and update the following file located at `server/routes/counter.js.dart`:
+
+```dart
+import 'package:dart_frog/dart_frog.dart';
+
+Response onRequest(RequestContext context) {
+  return Response(
+    body: template,
+    headers: {'Content-Type': 'application/javascript'},
+  );
+}
+
+const template = '''
+var state = {
+  value: "0",
+};
+
+function increment() {
+  const current = parseInt(state.value);
+  setValue(current + 1);
+}
+
+function decrement() {
+  const current = parseInt(state.value);
+  setValue(current - 1);
+}
+
+function setValue(value) {
+  state.value = value.toString();
+}
+''';
+```
+
+This creates a template containing valid JS which we will use to ship the counter logic for the UI.
+
+Navigate to the app directory and run the following command:
+
+```
+flutter pub add flutter_js
+```
+
+Update the following file located at `app/lib/network.dart`:
+
+```dart
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_js/flutter_js.dart';
+import 'package:http/http.dart' as http;
+
+import 'package:rfw/rfw.dart';
+
+import 'rfw/material.dart' as m;
+import 'rfw/core.dart' as c;
+
+class NetworkExample extends StatefulWidget {
+  const NetworkExample({super.key});
+
+  @override
+  State<NetworkExample> createState() => _NetworkExampleState();
+}
+
+class _NetworkExampleState extends State<NetworkExample> {
+  final _runtime = Runtime();
+  final _data = DynamicContent();
+  final _logic = getJavascriptRuntime();
+  bool loaded = false;
+  static const remoteName = LibraryName(['remote']);
+
+  @override
+  void initState() {
+    super.initState();
+    _runtime.update(
+      const LibraryName(['widgets']),
+      c.createCoreWidgets(),
+    );
+    _runtime.update(
+      const LibraryName(['material']),
+      m.createMaterialWidgets(),
+    );
+    _update();
+  }
+
+  @override
+  void reassemble() {
+    super.reassemble();
+    _update();
+  }
+
+  void _update() async {
+    const url = 'http://localhost:8080';
+    final results = await Future.wait([
+      http.get(Uri.parse('$url/counter.js')),
+      http.get(Uri.parse('$url/counter.rfw')),
+    ]);
+    final logicRes = results[0];
+    final uiRes = results[1];
+    if (logicRes.statusCode != 200 || uiRes.statusCode != 200) {
+      return;
+    }
+    _logic.evaluate(logicRes.body, sourceUrl: 'script.js');
+    $state();
+    _runtime.update(remoteName, decodeLibraryBlob(uiRes.bodyBytes));
+    if (mounted) setState(() => loaded = true);
+  }
+
+  void $state() {
+    final local = _logic.jsonStringify(_logic.evaluate('state'));
+    _data.update('state', jsonDecode(local));
+  }
+
+  void onEvent(String name, DynamicMap arguments) async {
+    debugPrint('event $name($arguments)');
+    _logic.evaluate('$name()');
+    $state();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!loaded) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final colors = Theme.of(context).colorScheme;
+    _data.update('colorScheme', <String, Object>{
+      'inversePrimary': colors.inversePrimary.value,
+      'inverseSurface': colors.inverseSurface.value,
+      'onInverseSurface': colors.onInverseSurface.value,
+      'primary': colors.primary.value,
+      'onPrimary': colors.onPrimary.value,
+      'primaryContainer': colors.primaryContainer.value,
+      'onPrimaryContainer': colors.onPrimaryContainer.value,
+      'secondary': colors.secondary.value,
+      'onSecondary': colors.onSecondary.value,
+      'secondaryContainer': colors.secondaryContainer.value,
+      'onSecondaryContainer': colors.onSecondaryContainer.value,
+      'tertiary': colors.tertiary.value,
+      'onTertiary': colors.onTertiary.value,
+      'tertiaryContainer': colors.tertiaryContainer.value,
+      'onTertiaryContainer': colors.onTertiaryContainer.value,
+      'error': colors.error.value,
+      'onError': colors.onError.value,
+      'errorContainer': colors.errorContainer.value,
+      'onErrorContainer': colors.onErrorContainer.value,
+      'background': colors.background.value,
+      'onBackground': colors.onBackground.value,
+      'surface': colors.surface.value,
+      'onSurface': colors.onSurface.value,
+      'outline': colors.outline.value,
+      'outlineVariant': colors.outlineVariant.value,
+      'scrim': colors.scrim.value,
+      'shadow': colors.shadow.value,
+    });
+    return Container(
+      color: colors.background,
+      child: RemoteWidget(
+        runtime: _runtime,
+        data: _data,
+        widget: const FullyQualifiedWidgetName(remoteName, 'root'),
+        onEvent: onEvent,
+      ),
+    );
+  }
+}
+```
+
+Now instead of keeping the counter state local we setup the JS engine and update based on events. This could get a lot more complex but this should be a minimal example of how to ship updates to both the UI and logic.
+
+Running the application will show two icon buttons instead of the FAB and will increment/decrement the counter when pressed.
+
 ## Conclusion
 
 There is a lot more we can do with this example but after doing a deep dive on the format I thought it would be useful for others to understand and see some examples.
-
-If you have any questions reach out to me on [Twitter](https://twitter.com/rodydavis) or [Github](https://github.com/rodydavis)!

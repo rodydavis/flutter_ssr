@@ -509,4 +509,11 @@ Map<String, LocalWidgetBuilder> get _materialWidgetsDefinitions =>
           child: source.child(['child']),
         );
       },
+      'IconButton': (context, source) {
+        return IconButton(
+          onPressed: source.voidHandler(['onPressed']),
+          tooltip: source.v<String>(['tooltip']),
+          icon: source.child(['icon']),
+        );
+      },
     };
