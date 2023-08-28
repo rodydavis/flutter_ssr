@@ -37,6 +37,8 @@ dependencies:
   cupertino_icons: ^1.0.2
   rfw: ^1.0.12
   http: ^1.1.0
+  flutter_js: ^0.8.0
+  hetu_script: ^0.4.2+1
 
 dev_dependencies:
   flutter_test:

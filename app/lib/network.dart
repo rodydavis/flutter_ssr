@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_js/flutter_js.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:rfw/rfw.dart';
@@ -16,13 +19,21 @@ class NetworkExample extends StatefulWidget {
 class _NetworkExampleState extends State<NetworkExample> {
   final _runtime = Runtime();
   final _data = DynamicContent();
+  final _logic = getJavascriptRuntime();
   bool loaded = false;
-  int count = 0;
-  final route = Uri.parse('http://localhost:8080/');
+  static const remoteName = LibraryName(['remote']);
 
   @override
   void initState() {
     super.initState();
+    _runtime.update(
+      const LibraryName(['widgets']),
+      c.createCoreWidgets(),
+    );
+    _runtime.update(
+      const LibraryName(['material']),
+      m.createMaterialWidgets(),
+    );
     _update();
   }
 
@@ -32,44 +43,39 @@ class _NetworkExampleState extends State<NetworkExample> {
     _update();
   }
 
-  static const coreName = LibraryName(['widgets']);
-  static const materialName = LibraryName(['material']);
-  static const remoteName = LibraryName(['remote']);
-
   void _update() async {
-    _runtime.update(coreName, c.createCoreWidgets());
-    _runtime.update(materialName, m.createMaterialWidgets());
-    await fetchWidget();
+    const url = 'http://localhost:8080';
+    final results = await Future.wait([
+      http.get(Uri.parse('$url/counter.js')),
+      http.get(Uri.parse('$url/counter.rfw')),
+    ]);
+    final logicRes = results[0];
+    final uiRes = results[1];
+    if (logicRes.statusCode != 200 || uiRes.statusCode != 200) {
+      return;
+    }
+    _logic.evaluate(logicRes.body, sourceUrl: 'script.js');
+    $state();
+    _runtime.update(remoteName, decodeLibraryBlob(uiRes.bodyBytes));
     if (mounted) setState(() => loaded = true);
   }
 
-  Future<void> fetchWidget() async {
-    final res = await http.get(route, headers: {
-      'COUNTER_VALUE': count.toString(),
-    });
-    if (res.statusCode == 200) {
-      count = int.tryParse(res.headers['counter_value'].toString()) ?? count;
-      _data.update('counter', <String, Object>{'value': '$count'});
-      _runtime.update(remoteName, decodeLibraryBlob(res.bodyBytes));
-    }
+  void $state() {
+    final local = _logic.jsonStringify(_logic.evaluate('state'));
+    _data.update('state', jsonDecode(local));
   }
 
   void onEvent(String name, DynamicMap arguments) async {
-    debugPrint('user triggered event "$name" with data: $arguments');
-    if (name == 'click') {
-      final res = await http.post(route, headers: {
-        'COUNTER_VALUE': count.toString(),
-      });
-      if (res.statusCode == 200) {
-        count = int.tryParse(res.headers['counter_value'].toString()) ?? count;
-        _data.update('counter', <String, Object>{'value': '$count'});
-        _runtime.update(remoteName, decodeLibraryBlob(res.bodyBytes));
-      }
-    }
+    debugPrint('event $name($arguments)');
+    _logic.evaluate('$name()');
+    $state();
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!loaded) {
+      return const Center(child: CircularProgressIndicator());
+    }
     final colors = Theme.of(context).colorScheme;
     _data.update('colorScheme', <String, Object>{
       'inversePrimary': colors.inversePrimary.value,
@@ -100,16 +106,12 @@ class _NetworkExampleState extends State<NetworkExample> {
       'scrim': colors.scrim.value,
       'shadow': colors.shadow.value,
     });
-    if (!loaded) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    const root = FullyQualifiedWidgetName(remoteName, 'root');
     return Container(
-      color: Theme.of(context).scaffoldBackgroundColor,
+      color: colors.background,
       child: RemoteWidget(
         runtime: _runtime,
         data: _data,
-        widget: root,
+        widget: const FullyQualifiedWidgetName(remoteName, 'root'),
         onEvent: onEvent,
       ),
     );
